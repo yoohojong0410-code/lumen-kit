@@ -1,0 +1,81 @@
+name: d
+
+# 카페 소개 값 받기(cafe_info.py). 대상 목록 파일을 서버 n대가 나눠 받는다. b · c 와 따로 돈다.
+on:
+  workflow_dispatch:
+    inputs:
+      f:
+        description: 대상 목록 파일(data/ 아래 JSON 배열)
+        required: true
+        type: string
+      n:
+        description: 서버 수(최대 20)
+        required: false
+        default: '20'
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  PYTHONIOENCODING: utf-8
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      idx: ${{ steps.p.outputs.idx }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: p
+        env:
+          F: ${{ inputs.f }}
+          N: ${{ inputs.n }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          words = json.load(open(os.environ["F"], encoding="utf-8"))
+          n = max(1, min(int(os.environ.get("N") or 20), 20, len(words)))
+          os.makedirs("plan", exist_ok=True)
+          for i in range(n):
+              json.dump(words[i::n], open(f"plan/t{i}.json", "w", encoding="utf-8"), ensure_ascii=False)
+          open(os.environ["GITHUB_OUTPUT"], "a").write(f"idx={json.dumps(list(range(n)))}\n")
+          print(len(words), n)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: p-${{ github.run_id }}
+          path: plan/
+          retention-days: 14
+
+  get:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        i: ${{ fromJSON(needs.plan.outputs.idx) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: p-${{ github.run_id }}
+          path: plan
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install curl_cffi==0.15.0
+      - run: |
+          mkdir -p out
+          python cafe_info.py --targets "plan/t${{ matrix.i }}.json" --out out/카페소개.jsonl
+      - if: always()
+        run: touch out/카페소개.jsonl
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r-${{ github.run_id }}-${{ matrix.i }}
+          path: out/
+          retention-days: 14
